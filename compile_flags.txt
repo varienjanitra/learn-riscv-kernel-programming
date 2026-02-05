@@ -1,0 +1,13 @@
+-std=c23
+-O2
+-g3
+-Wall
+-Wextra
+--target=riscv64-unknown-elf
+-mcmodel=medany
+-fno-PIC
+-fuse-ld=lld
+-fno-stack-protector
+-ffreestanding
+-nostdlib
+-Iinclude
