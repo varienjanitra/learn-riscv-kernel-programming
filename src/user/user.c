@@ -28,6 +28,16 @@ long getchar(void)
 	return syscall(SYS_GETCHAR, 0, 0, 0);
 }
 
+int readfile(const char *filename, char *buf, size_t len)
+{
+	return syscall(SYS_READFILE, (long) filename, (long) buf, (long) len);
+}
+
+int writefile(const char *filename, char *buf, size_t len)
+{
+	return syscall(SYS_WRITEFILE, (long) filename, (long) buf, (long) len);
+}
+
 __attribute__((section(".text.start")))
 __attribute__((naked))
 void start(void)

@@ -18,6 +18,9 @@ struct virtio_blk_req *blk_req;
 paddr_t blk_req_paddr;
 uint64_t blk_capacity;
 
+struct file files[FILES_MAX];
+uint8_t disk[DISK_MASK_SIZE];
+
 paddr_t alloc_pages(uint64_t n)
 {
 	static paddr_t next_paddr = (paddr_t) __free_ram;
@@ -167,7 +170,7 @@ void user_entry(void)
 		"sret\n"
 		:
 		: [sepc] "r" (USER_BASE), \
-		  [sstatus] "r" (SSTATUS_SPIE)
+		  [sstatus] "r" (SSTATUS_SPIE | SSTATUS_SUM)
 	);
 }
 
@@ -326,53 +329,6 @@ void yield(void)
 	switch_context(&prev->sp, &next->sp);
 }
 
-void handle_syscall(struct trap_frame *f)
-{
-	switch (f->a3) {
-	case SYS_PUTCHAR:
-		putchar(f->a0);
-		break;
-	case SYS_GETCHAR:
-		while (1) {
-			long ch = getchar();
-			if (ch >= 0) {
-				f->a0 = ch;
-				break;
-			}
-
-			yield();
-		}
-		break;
-	case SYS_EXIT:
-		printf("Process %d exited\n", current_proc->pid);
-		current_proc->state = PROC_EXITED;
-		yield();
-		PANIC("Unreachable point from SYS_EXIT");
-	default:
-		PANIC("Unexpected syscall a3 = %p\n", f->a3);
-	}
-}
-
-void handle_trap(struct trap_frame *f)
-{
-	uint64_t scause = READ_CSR(scause);
-	uint64_t stval = READ_CSR(stval);
-	uint64_t user_pc = READ_CSR(sepc);
-
-	if (scause == SCAUSE_ECALL) {
-		handle_syscall(f);
-		user_pc += 4;
-	} else {
-		PANIC("Unexpected trap:\n" \
-			"scause = %p\n" \
-			"stval = %p\n" \
-			"sepc = %p\n" \
-			, scause, stval, user_pc);
-	}
-
-	WRITE_CSR(sepc, user_pc);
-}
-
 // Virtio-related helper functions
 static inline uintptr_t virtio_reg_addr(unsigned offset)
 {
@@ -526,6 +482,216 @@ void read_write_disk(void *buf, unsigned sector, int is_write)
 		memcpy(buf, blk_req->data, SECTOR_SIZE);
 }
 
+size_t oct2int(char *oct, int len)
+{
+	size_t dec = 0;
+	for (int i = 0; i < len; i++) {
+		if (oct[i] < '0' || oct[i] > '7') {
+			break;
+		}
+
+		dec = dec * 8 + (oct[i] - '0');
+	}
+
+	return dec;
+}
+
+void fs_init(void)
+{
+	// Zero out the metadata
+	memset(files, 0, sizeof(files));
+
+	size_t off = 0;
+
+	for (int i = 0; i < FILES_MAX; i++) {
+		struct tar_header header;
+
+		read_write_disk(&header, off / SECTOR_SIZE, false);
+
+		if (header.name[0] == '\0') {
+			break;
+		}
+
+		size_t filesz = oct2int(header.size, sizeof(header.size));
+		struct file *file = &files[i];
+
+		file->in_use = true;
+		file->size = filesz;
+		strncpy(file->name, header.name, sizeof(file->name));
+
+		size_t num_pages = align_up(filesz, PAGE_SIZE) / PAGE_SIZE;
+		file->data = (uint8_t *) alloc_pages(num_pages);
+
+		unsigned data_sector = (off / SECTOR_SIZE) + 1;
+
+		for (size_t s = 0; s < num_pages; s++) {
+			read_write_disk(file->data + (s * SECTOR_SIZE), data_sector + s, false);
+		}
+
+		printf("Loaded File: %s, size=%d bytes\n", file->name, file->size);
+
+		off += align_up(sizeof(struct tar_header) + filesz, SECTOR_SIZE);
+	}
+}
+
+void fs_flush(void)
+{
+	size_t sector_ofset = 0;
+
+	for (int i = 0; i < FILES_MAX; i++) {
+		struct file *file = &files[i];
+
+		if (!file->in_use) {
+			continue;
+		}
+
+		struct tar_header header;
+		memset(&header, 0, sizeof(header));
+
+		strncpy(header.name, file->name, sizeof(header.name));
+		strncpy(header.mode, "0000644", sizeof(header.mode));
+		strncpy(header.magic, "ustar", 6);
+		header.type = '0';
+
+		size_t temp_sz = file->size;
+
+		for (int j = 10; j >= 0; j--) {
+			header.size[j] = (temp_sz % 8) + '0';
+			temp_sz /= 8;
+		}
+
+		memset(header.checksum, ' ', sizeof(header.checksum));
+
+		size_t chk = 0;
+		unsigned char *raw = (unsigned char *) &header;
+
+		for (size_t j = 0; j < 512; j++) {
+			chk += raw[j];
+		}
+
+		for (int j = 6; j >= 0; j--) {
+			header.checksum[j] = (chk % 8) + '0';
+			chk /= 8;
+		}
+
+		read_write_disk(&header, sector_ofset++, true);
+
+		size_t data_sectors = align_up(file->size, SECTOR_SIZE) / SECTOR_SIZE;
+
+		for (size_t s = 0; s < data_sectors; s++) {
+			read_write_disk(file->data + (s * SECTOR_SIZE), sector_ofset++, true);
+		}
+	}
+
+	printf("Disk flush complete. Used %d sectors.\n", sector_ofset);
+}
+
+struct file *fs_lookup(const char *filename)
+{
+	for (int i = 0; i < FILES_MAX; i++) {
+		struct file *file = &files[i];
+
+		if(!strcmp(file->name, filename)) {
+			return file;
+		}
+	}
+
+	return nullptr;
+}
+
+void handle_syscall(struct trap_frame *f)
+{
+	switch (f->a3) {
+	case SYS_PUTCHAR:
+		putchar(f->a0);
+		break;
+	case SYS_GETCHAR:
+		while (1) {
+			long ch = getchar();
+			if (ch >= 0) {
+				f->a0 = ch;
+				break;
+			}
+
+			yield();
+		}
+		break;
+	case SYS_EXIT:
+		printf("Process %d exited\n", current_proc->pid);
+		current_proc->state = PROC_EXITED;
+		yield();
+		PANIC("Unreachable point from SYS_EXIT");
+	case SYS_READFILE: {
+		uintptr_t filename = f->a0;
+		uintptr_t buf = f->a1;
+		size_t len = (size_t) f->a2;
+
+		struct file *file = fs_lookup((const char *) filename);
+
+		if (!file) {
+			f->a0 = -1;
+			break;
+		}
+
+		if (len > file->size) {
+			len = file->size;
+		}
+
+		memcpy((void *)buf, file->data, len);
+
+		f->a0 = len;
+		break;
+	}
+	case SYS_WRITEFILE: {
+		uintptr_t filename = f->a0;
+		uintptr_t buf = f->a1;
+		size_t len = (size_t) f->a2;
+
+		struct file *file = fs_lookup((const char *) filename);
+
+		if (!file) {
+			printf("File not found: %s\n", filename);
+			f->a0 = -1;
+			break;
+		}
+
+		if (len > MAX_FILE_SIZE) {
+			len = MAX_FILE_SIZE;
+		}
+
+
+		memcpy(file->data, (void *) buf, len);
+		file->size = len;
+		fs_flush();
+		f->a0 = len;
+
+		break;
+	}
+	default:
+		PANIC("Unexpected syscall a3 = %p\n", f->a3);
+	}
+}
+
+void handle_trap(struct trap_frame *f)
+{
+	uint64_t scause = READ_CSR(scause);
+	uint64_t stval = READ_CSR(stval);
+	uint64_t user_pc = READ_CSR(sepc);
+
+	if (scause == SCAUSE_ECALL) {
+		handle_syscall(f);
+		user_pc += 4;
+	} else {
+		PANIC("Unexpected trap:\n" \
+			"scause = %p\n" \
+			"stval = %p\n" \
+			"sepc = %p\n" \
+			, scause, stval, user_pc);
+	}
+
+	WRITE_CSR(sepc, user_pc);
+}
+
 void kernel_main(void)
 {
 	// Initialize bss memory region to zero
@@ -538,7 +704,19 @@ void kernel_main(void)
 
 	// Initialize virtio
 	virtio_blk_init();
+	fs_init();
 
+	for (int i = 0; i < FILES_MAX; i++) {
+		if (files[i].in_use) {
+			// We use .size to make sure we don't print the trailing sector garbage
+			printf("Content of %s: ", files[i].name);
+			for (size_t j = 0; j < files[i].size; j++) {
+				printf("%c", files[i].data[j]);
+			}
+			printf("\n");
+		}
+	}
+	/*
 	// Trial to write a disk
 	// 1. Initial read (Should show Lorem)
 	char buf[SECTOR_SIZE + 1];
@@ -557,6 +735,7 @@ void kernel_main(void)
 	read_write_disk(buf, 0, false);
 	buf[SECTOR_SIZE] = '\0';
 	printf("After write: %s\n", buf);
+	*/
 
 	// Start process 0
 	idle_proc = create_process(nullptr, 0);

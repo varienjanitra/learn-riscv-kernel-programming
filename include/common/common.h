@@ -27,6 +27,8 @@ typedef uint64_t vaddr_t;
 #define SYS_PUTCHAR 1
 #define SYS_GETCHAR 2
 #define SYS_EXIT 3
+#define SYS_READFILE 4
+#define SYS_WRITEFILE 5
 
 void *memset(void *buf, char c, size_t n);
 void *memcpy(void *dst, const void *src, size_t n);
@@ -35,6 +37,9 @@ long getchar(void);
 void printf(const char *fmt, ...);
 char *strcpy(char *dst, const char *src);
 int strcmp(const char *s1, const char *s2);
+int strncmp(const char *s1, const char *s2, size_t n);
+char *strncpy(char *dest, const char *src, size_t n);
+size_t strlen(const char *s);
 
 struct sbiret {
 	long error;

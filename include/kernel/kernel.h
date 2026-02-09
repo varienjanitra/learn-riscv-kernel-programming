@@ -22,6 +22,7 @@
 #define USER_BASE 0x1000000
 // Switch to user mode
 #define SSTATUS_SPIE (1 << 5)
+#define SSTATUS_SUM (1 << 18)
 #define SCAUSE_ECALL 8
 
 // Virtio-related Define
@@ -53,6 +54,11 @@
 
 #define VIRTIO_BLK_T_IN  0
 #define VIRTIO_BLK_T_OUT 1
+
+// TAR disk format-related define
+#define FILES_MAX 2
+#define MAX_FILE_SIZE 1024
+#define DISK_MASK_SIZE align_up(sizeof(struct file) * FILES_MAX, SECTOR_SIZE)
 
 // Kernel Macros
 #define PANIC(fmt, ...) \
@@ -163,3 +169,34 @@ struct virtio_blk_req {
 	uint8_t data[SECTOR_SIZE];
 	uint8_t status;
 } __attribute__((packed));
+
+// TAR disk format-related structs
+struct tar_header {
+	char name[100];
+	char mode[8];
+	char uid[8];
+	char gid[8];
+	char size[12];
+	char mtime[12];
+	char checksum[8];
+	char type;
+	char linkname[100];
+	char magic[6];
+	char version[2];
+	char uname[32];
+	char gname[32];
+	char devmajor[8];
+	char devminor[8];
+	char prefix[155];
+	char padding[12];
+	// Array pointing to the data area following the header
+	// Flexible array member
+	char data[];
+} __attribute__((packed));
+
+struct file {
+	bool in_use;
+	char name[100];
+	uint8_t *data;
+	size_t size;
+};

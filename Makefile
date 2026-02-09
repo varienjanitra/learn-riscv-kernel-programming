@@ -2,6 +2,8 @@
 CC = clang
 OBJCOPY = llvm-objcopy
 QEMU = qemu-system-riscv64
+DISK_TAR = disk.tar
+DISK_DIR = disk
 
 # Flags
 CFLAGS = -std=c23 -O2 -g3 -Wall -Wextra --target=riscv64-unknown-elf \
@@ -23,7 +25,7 @@ SHELL_BIN_O = $(DIST_DIR)/shell.bin.o
 
 .PHONY: all clean run
 
-all: $(KERNEL_ELF)
+all: $(KERNEL_ELF) $(DISK_TAR)
 
 # 1. Build User Shell
 $(DIST_DIR)/shell.elf: $(SRC_DIR)/user/shell.c $(SRC_DIR)/user/user.c $(SRC_DIR)/common/common.c
@@ -44,12 +46,18 @@ $(KERNEL_ELF): $(SRC_DIR)/kernel/kernel.c $(SRC_DIR)/common/common.c $(SHELL_BIN
 
 # --- Utils ---
 
+# Create disk.tar from files in the disk/ folder
+# This will only run if files inside disk/ are newer than disk.tar
+$(DISK_TAR): $(wildcard $(DISK_DIR)/*.txt)
+	@echo "Bundling disk.tar..."
+	(cd $(DISK_DIR) && tar cf ../$(DISK_TAR) --format=ustar *.txt)
+
 run: all
 	$(QEMU) -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
 	    -d unimp,guest_errors,int,cpu_reset -D $(DIST_DIR)/qemu.log \
-	    -drive id=drive0,file=lorem.txt,format=raw,if=none \
+	    -drive id=drive0,file=$(DISK_TAR),format=raw,if=none \
 	    -device virtio-blk-device,drive=drive0,bus=virtio-mmio-bus.0 \
 	    -kernel $(KERNEL_ELF)
 
 clean:
-	rm -rf $(DIST_DIR)
+	rm -rf $(DIST_DIR) $(DISK_TAR)
