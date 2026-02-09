@@ -3,23 +3,31 @@
 void main(void)
 {
 	while (1) {
-prompt:
 		printf("> ");
 
 		char cmdline[128];
-		for (int i = 0;; i++) {
+		for (size_t i = 0;;) {
 			char ch = getchar();
-			putchar(ch);
 
-			if(i == sizeof(cmdline) - 1) {
-				printf("Command line too long\n");
-				goto prompt;
-			} else if (ch == '\r') {
+			if (ch == 127 || ch == 8) {
+				if (i > 0) {
+					i--;
+					putchar('\b');
+					putchar(' ');
+					putchar('\b');
+				}
+				continue;
+			}
+
+			if (ch == '\r' || ch == '\n') {
 				printf("\n");
 				cmdline[i] = '\0';
 				break;
-			} else {
-				cmdline[i] = ch;
+			}
+
+			if (i < sizeof(cmdline) - 1) {
+				cmdline[i++] = ch;
+				putchar(ch);
 			}
 		}
 

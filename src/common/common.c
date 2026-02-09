@@ -80,6 +80,8 @@ void printf(const char *fmt, ...)
 			case 's': {
 				const char *s = va_arg(vargs, const char *);
 
+				if (!s) s = "(null)";
+
 				while (*s) {
 					putchar (*s);
 					s++;
@@ -94,6 +96,11 @@ void printf(const char *fmt, ...)
 				if (value < 0) {
 					putchar('-');
 					magnitude = -magnitude;
+				}
+
+				if (value == 0) {
+					putchar('0');
+					break;
 				}
 
 				unsigned long divisor = 1;
@@ -115,13 +122,22 @@ void printf(const char *fmt, ...)
 				break;
 			case 'x':
 			case 'p': {
+				if (*fmt == 'p') {
+					putchar('0');
+					putchar('x');
+				}
 				uint64_t value = va_arg(vargs, uint64_t);
 
+				bool started = false;
 				for (int i = 15; i >= 0; i--) {
 					uint64_t nibble = (value >> (i * 4)) & 0xf;
+					if (nibble > 0 || started || i == 0) {
+						putchar("0123456789abcdef"[nibble]);
+						started = true;
+					}
 
-					putchar("0123456789abcdef"[nibble]);
 				}
+				break;
 			}
 			}
 		} else {
